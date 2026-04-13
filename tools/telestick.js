@@ -7,31 +7,14 @@
 //  directly into WhatsApp. Auto-splits into multiple packs
 //  if the pack has more than 30 stickers (WA limit).
 //
-//  Requires: axios, adm-zip, jimp
-//  Install:  npm install jimp
+//  Requires: axios, adm-zip (both already in bot)
+//  No image processing deps needed!
 // ============================================================
 
-
+const axios  = require('axios');
 const AdmZip = require('adm-zip');
-const Jimp   = require('jimp');
 
 // ─── Helpers ─────────────────────────────────────────────────
-
-// Resize buffer to 512x512 for stickers
-async function resizeSticker(buffer) {
-  const img = await Jimp.read(buffer);
-  return img
-    .resize(512, 512)
-    .getBufferAsync(Jimp.MIME_PNG);
-}
-
-// Resize buffer to 96x96 for tray icon
-async function resizeTray(buffer) {
-  const img = await Jimp.read(buffer);
-  return img
-    .resize(96, 96)
-    .getBufferAsync(Jimp.MIME_PNG);
-}
 
 // Download URL as buffer
 async function fetchBuffer(url) {
@@ -39,13 +22,12 @@ async function fetchBuffer(url) {
   return Buffer.from(res.data);
 }
 
-// Build one .wastickers ZIP from processed sticker buffers
+// Build one .wastickers ZIP from sticker buffers
 function buildWastickers(stickerBuffers, trayBuffer, title, author) {
   const zip = new AdmZip();
 
   for (let i = 0; i < stickerBuffers.length; i++) {
-    // .wastickers spec uses timestamp-style filenames, no subdirs
-    zip.addFile(`${Date.now() + i}.png`, stickerBuffers[i]);
+    zip.addFile(`${Date.now() + i}.webp`, stickerBuffers[i]);
   }
 
   if (trayBuffer) zip.addFile('cover.png', trayBuffer);
@@ -112,41 +94,35 @@ const telestick = {
       `📦 *${packTitle}*\n` +
       `👤 ${packAuthor}\n` +
       `📊 ${allStickers.length} stickers` +
-      (skipped    > 0 ? ` | ⏭ ${skipped} animated skipped`       : '') +
+      (skipped    > 0 ? ` | ⏭ ${skipped} animated skipped`        : '') +
       (totalPacks > 1 ? ` | 📂 Splitting into ${totalPacks} packs` : '') +
-      `\n\n🔨 Building pack${totalPacks > 1 ? 's' : ''}...`
+      `\n\n⬇️ Downloading ${staticStickers.length} stickers...`
     );
 
-    // ── Download & process all stickers ─────────────────────
-    const processed = [];
+    // ── Download all stickers ────────────────────────────────
+    const downloaded = [];
     let failed = 0;
 
     for (let i = 0; i < staticStickers.length; i++) {
       try {
-        const raw     = await fetchBuffer(staticStickers[i].url);
-        const resized = await resizeSticker(raw);
-
-        // Generate tray icon from first sticker of each pack chunk
-        let tray = null;
-        if (i % PACK_SIZE === 0) {
-          tray = await resizeTray(raw);
-        }
-
-        processed.push({ buffer: resized, tray });
+        const buffer = await fetchBuffer(staticStickers[i].url);
+        downloaded.push(buffer);
       } catch (e) {
         failed++;
       }
     }
 
-    if (processed.length < 3) {
-      return xreply(`❌ Only got ${processed.length} stickers (need at least 3). Try another pack.`);
+    if (downloaded.length < 3) {
+      return xreply(`❌ Only downloaded ${downloaded.length} stickers (need at least 3). Try another pack.`);
     }
+
+    await xreply(`🔨 Building pack${totalPacks > 1 ? 's' : ''}...`);
 
     // ── Split into chunks of 30 & send each pack ─────────────
     let sentPacks = 0;
 
     for (let p = 0; p < totalPacks; p++) {
-      const chunk = processed.slice(p * PACK_SIZE, (p + 1) * PACK_SIZE);
+      const chunk = downloaded.slice(p * PACK_SIZE, (p + 1) * PACK_SIZE);
       if (chunk.length < 1) continue;
 
       // Name: "PackName" for part 1, "PackName 2", "PackName 3" etc.
@@ -154,10 +130,10 @@ const telestick = {
         ? (p === 0 ? packTitle : `${packTitle} ${p + 1}`)
         : packTitle;
 
-      const trayBuffer = chunk.find(c => c.tray)?.tray || null;
-      const buffers    = chunk.map(c => c.buffer);
+      // Use first sticker of chunk as tray icon (webp works as cover too)
+      const trayBuffer = chunk[0];
 
-      const wastickersBuffer = buildWastickers(buffers, trayBuffer, chunkTitle, packAuthor);
+      const wastickersBuffer = buildWastickers(chunk, trayBuffer, chunkTitle, packAuthor);
       const filename = totalPacks > 1
         ? `${safeTitle}_${p + 1}.wastickers`
         : `${safeTitle}.wastickers`;
@@ -176,7 +152,7 @@ const telestick = {
 
         sentPacks++;
 
-        // Small delay between packs to avoid flooding
+        // Small delay between packs
         if (p < totalPacks - 1) {
           await new Promise(r => setTimeout(r, 1000));
         }
@@ -189,8 +165,8 @@ const telestick = {
     return xreply(
       `✅ *Done!*\n` +
       `📂 ${sentPacks} pack${sentPacks !== 1 ? 's' : ''} sent\n` +
-      `🎭 ${processed.length} stickers total\n` +
-      (failed  > 0 ? `❌ ${failed} failed to process\n`           : '') +
+      `🎭 ${downloaded.length} stickers total\n` +
+      (failed  > 0 ? `❌ ${failed} failed to download\n`          : '') +
       (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`  : '') +
       `\n_Tap each file to install!_`
     );
