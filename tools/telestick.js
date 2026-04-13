@@ -6,8 +6,6 @@
 //  Sends all stickers from a Telegram sticker pack to WhatsApp
 // ============================================================
 
-const axios = require('axios');
-
 const telestick = {
   command:  ['telestick', 'tgsticker', 'tgstick'],
   desc:     'Download & send all stickers from a Telegram sticker pack',
