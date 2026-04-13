@@ -1,9 +1,16 @@
 // ============================================================
 //  TRASHCORE ULTRA — External Plugin
 //  tools/telestick.js  |  Telegram → WhatsApp Sticker Pack
+//
+//  Usage: .telestick <t.me/addstickers/PackName>
+//  Builds proper .wastickers files the recipient can install
+//  directly into WhatsApp. Auto-splits into multiple packs
+//  if the pack has more than 30 stickers (WA limit).
+//
+//  Requires: axios, adm-zip (both already in bot)
 // ============================================================
 
-
+const axios  = require('axios');
 const AdmZip = require('adm-zip');
 
 // Download URL as buffer
@@ -45,7 +52,8 @@ const telestick = {
       return xreply(
         `🎭 *Telegram → WhatsApp Sticker Pack*\n\n` +
         `Usage: *.telestick <t.me/addstickers/PackName>*\n` +
-        `Example: *.telestick https://t.me/addstickers/Beluga887*`
+        `Example: *.telestick https://t.me/addstickers/Beluga887*\n\n` +
+        `_Sends installable .wastickers file(s) — tap to add directly to WhatsApp!_`
       );
     }
 
@@ -71,10 +79,6 @@ const telestick = {
     const allStickers = result.sticker || [];
     if (!allStickers.length) return xreply('❌ No stickers found in this pack.');
 
-    // ── Debug: show first sticker URL so we know what we're dealing with ──
-    const firstUrl = allStickers[0]?.url || 'N/A';
-    await xreply(`🔍 *Debug — First sticker URL:*\n${firstUrl}`);
-
     // Filter out animated/video stickers (.webm)
     const staticStickers = allStickers.filter(s => !s.url.endsWith('.webm'));
     const skipped = allStickers.length - staticStickers.length;
@@ -92,21 +96,8 @@ const telestick = {
       `📊 ${allStickers.length} stickers` +
       (skipped    > 0 ? ` | ⏭ ${skipped} animated skipped`        : '') +
       (totalPacks > 1 ? ` | 📂 Splitting into ${totalPacks} packs` : '') +
-      `\n\n⬇️ Downloading...`
+      `\n\n⬇️ Downloading ${staticStickers.length} stickers...`
     );
-
-    // ── Try downloading first sticker only to check error ────
-    try {
-      const testBuffer = await fetchBuffer(firstUrl);
-      await xreply(`✅ Test download OK — ${testBuffer.length} bytes`);
-    } catch (e) {
-      return xreply(
-        `❌ *Download failed on first sticker*\n\n` +
-        `URL: ${firstUrl}\n` +
-        `Error: ${e.message}\n\n` +
-        `_This tells us what's wrong — share this message_`
-      );
-    }
 
     // ── Download all stickers ────────────────────────────────
     const downloaded = [];
@@ -140,7 +131,11 @@ const telestick = {
 
       const trayBuffer       = chunk[0];
       const wastickersBuffer = buildWastickers(chunk, trayBuffer, chunkTitle, packAuthor);
-      const filename         = totalPacks > 1
+
+      // ⚠️ Key fix: filename must end in .wastickers AND
+      // mimetype must be image/webp so WhatsApp opens it
+      // with the sticker importer instead of treating it as a BIN
+      const filename = totalPacks > 1
         ? `${safeTitle}_${p + 1}.wastickers`
         : `${safeTitle}.wastickers`;
 
@@ -148,7 +143,7 @@ const telestick = {
         await trashcore.sendMessage(m.key.remoteJid, {
           document: wastickersBuffer,
           fileName: filename,
-          mimetype: 'application/octet-stream',
+          mimetype: 'image/webp',   // ← triggers WhatsApp sticker importer
           caption:
             `🎭 *${chunkTitle}*\n` +
             `📦 ${chunk.length} stickers` +
@@ -159,7 +154,7 @@ const telestick = {
         sentPacks++;
         if (p < totalPacks - 1) await new Promise(r => setTimeout(r, 1000));
       } catch (e) {
-        // continue
+        // continue to next pack
       }
     }
 
@@ -167,8 +162,8 @@ const telestick = {
       `✅ *Done!*\n` +
       `📂 ${sentPacks} pack${sentPacks !== 1 ? 's' : ''} sent\n` +
       `🎭 ${downloaded.length} stickers total\n` +
-      (failed  > 0 ? `❌ ${failed} failed\n`                       : '') +
-      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`   : '') +
+      (failed  > 0 ? `❌ ${failed} failed to download\n`          : '') +
+      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`  : '') +
       `\n_Tap each file to install!_`
     );
   }
