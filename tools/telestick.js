@@ -10,7 +10,6 @@
 //  Requires: axios, adm-zip (both already in bot)
 // ============================================================
 
-const axios  = require('axios');
 const AdmZip = require('adm-zip');
 
 // Download URL as buffer
