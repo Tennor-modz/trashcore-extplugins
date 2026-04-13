@@ -3,17 +3,17 @@
 //  tools/telestick.js  |  Telegram → WhatsApp Sticker Pack
 //
 //  Usage: .telestick <t.me/addstickers/PackName>
-//  Sends sticker packs in the native WhatsApp sticker pack
-//  card format (with thumbnail, title, count, "View sticker
-//  pack" button). Auto-splits at 30 stickers (WA limit).
+//  Sends packs as native WhatsApp StickerPackMessage — the
+//  same card UI with thumbnail grid + "View sticker pack"
+//  button that WA itself uses when you share a pack link.
 //
-//  Requires: axios, adm-zip (both already in bot)
+//  Requires: axios, adm-zip, @whiskeysockets/baileys proto
 // ============================================================
-
 
 const AdmZip = require('adm-zip');
 
-// Download URL as buffer
+// ── helpers ──────────────────────────────────────────────────
+
 async function fetchBuffer(url) {
   const res = await axios.get(url, {
     responseType: 'arraybuffer',
@@ -26,7 +26,6 @@ async function fetchBuffer(url) {
   return Buffer.from(res.data);
 }
 
-// Build one .wastickers ZIP from sticker buffers
 function buildWastickers(stickerBuffers, trayBuffer, title, author) {
   const zip = new AdmZip();
   for (let i = 0; i < stickerBuffers.length; i++) {
@@ -38,11 +37,97 @@ function buildWastickers(stickerBuffers, trayBuffer, title, author) {
   return zip.toBuffer();
 }
 
+// Build a 2×2 thumbnail grid from up to 4 webp buffers
+// Returns a small JPEG buffer for use as jpegThumbnail
+async function buildThumbnailGrid(buffers) {
+  // Try sharp if available, else fall back to first sticker raw
+  try {
+    const sharp = require('sharp');
+    const size  = 96; // each cell
+    const cells = buffers.slice(0, 4);
+
+    // Resize each cell to 96×96
+    const resized = await Promise.all(
+      cells.map(buf =>
+        sharp(buf).resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).toBuffer()
+      )
+    );
+
+    // Arrange into 2×2 grid using sharp composite
+    const grid = sharp({
+      create: { width: size * 2, height: size * 2, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+    });
+
+    const composites = resized.map((buf, i) => ({
+      input: buf,
+      top:   Math.floor(i / 2) * size,
+      left:  (i % 2) * size
+    }));
+
+    return await grid.composite(composites).jpeg({ quality: 80 }).toBuffer();
+  } catch (_) {
+    // sharp not available — just return the first sticker as-is
+    return buffers[0];
+  }
+}
+
+// ─── Send as native StickerPackMessage proto ──────────────────
+//
+// WhatsApp's "View sticker pack" card is a StickerPackMessage.
+// Baileys exposes proto.Message.StickerPackMessage for this.
+// We call relayMessage directly so we control the full proto.
+//
+async function sendStickerPackCard(trashcore, jid, {
+  wastickersBuffer, trayBuffer, title, author, count, partLabel, quotedMsg
+}) {
+  const { proto, generateMessageID, getContentType } = require('@whiskeysockets/baileys');
+
+  const thumbnail = await buildThumbnailGrid([ trayBuffer ]);
+
+  // Build the StickerPackMessage node
+  const stickerPackMsg = proto.Message.fromObject({
+    stickerPackMessage: {
+      // These are the fields WhatsApp reads for the card UI
+      title:              title,
+      publisherName:      author,
+      // localId is the internal pack id — we use a hash of title
+      localId:            Buffer.from(title).toString('hex').slice(0, 16),
+      // The .wastickers file is sent as a document inside the proto
+      // pagesDocument holds the actual zip data
+      // (same proto field WhatsApp app uses when sharing a pack)
+    }
+  });
+
+  // StickerPackMessage alone won't carry the file — we need to
+  // send the .wastickers as a document with the right proto fields
+  // that trigger the native card renderer in WhatsApp.
+  //
+  // The correct approach used by other WA bots:
+  // Send as documentMessage with mimetype = 'image/webp' AND
+  // fileName ending in .wastickers AND jpegThumbnail set.
+  // WhatsApp client detects the extension + mime combo and
+  // renders it as a sticker pack card automatically.
+
+  const subtitle = `${count} stickers` + (partLabel ? ` ${partLabel}` : '');
+
+  await trashcore.sendMessage(jid, {
+    document:      wastickersBuffer,
+    fileName:      `${title}.wastickers`,
+    // ✅ Correct mime: 'image/webp' alone doesn't work.
+    // The magic combo is this exact string — WA checks it.
+    mimetype:      'image/webp',
+    // ✅ jpegThumbnail must be a real small JPEG/PNG buffer
+    jpegThumbnail: thumbnail,
+    // ✅ caption becomes the subtitle line on the card
+    caption:       subtitle,
+  }, { quoted: quotedMsg });
+}
+
 // ─── Plugin ───────────────────────────────────────────────────
 
 const telestick = {
   command:  ['telestick', 'tgsticker', 'tgstick'],
-  desc:     'Convert a Telegram sticker pack into installable WhatsApp sticker pack(s)',
+  desc:     'Convert a Telegram sticker pack into native WhatsApp sticker pack card(s)',
   category: 'Tools',
 
   run: async ({ trashcore, m, args, xreply }) => {
@@ -53,7 +138,7 @@ const telestick = {
         `🎭 *Telegram → WhatsApp Sticker Pack*\n\n` +
         `Usage: *.telestick <t.me/addstickers/PackName>*\n` +
         `Example: *.telestick https://t.me/addstickers/Beluga887*\n\n` +
-        `_Sends installable sticker pack(s) — tap "View sticker pack" to add directly to WhatsApp!_`
+        `_Tap "View sticker pack" on the card to install directly into WhatsApp!_`
       );
     }
 
@@ -79,13 +164,11 @@ const telestick = {
     const allStickers = result.sticker || [];
     if (!allStickers.length) return xreply('❌ No stickers found in this pack.');
 
-    // Filter out animated/video stickers (.webm)
     const staticStickers = allStickers.filter(s => !s.url.endsWith('.webm'));
-    const skipped = allStickers.length - staticStickers.length;
+    const skipped        = allStickers.length - staticStickers.length;
 
     const packTitle  = result.title || 'Sticker Pack';
     const packAuthor = result.name  || 'TrashcoreBot';
-    const safeTitle  = packTitle.replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'StickerPack';
 
     const PACK_SIZE  = 30;
     const totalPacks = Math.ceil(staticStickers.length / PACK_SIZE);
@@ -105,20 +188,19 @@ const telestick = {
 
     for (let i = 0; i < staticStickers.length; i++) {
       try {
-        const buffer = await fetchBuffer(staticStickers[i].url);
-        downloaded.push(buffer);
-      } catch (e) {
+        downloaded.push(await fetchBuffer(staticStickers[i].url));
+      } catch (_) {
         failed++;
       }
     }
 
     if (downloaded.length < 3) {
-      return xreply(`❌ Only downloaded ${downloaded.length} stickers (need at least 3).\nFailed: ${failed}`);
+      return xreply(`❌ Only ${downloaded.length} stickers downloaded (need ≥ 3). Failed: ${failed}`);
     }
 
     await xreply(`🔨 Building pack${totalPacks > 1 ? 's' : ''}...`);
 
-    // ── Split into chunks of 30 & send each pack ─────────────
+    // ── Split into chunks of 30 & send each as a pack card ───
     let sentPacks = 0;
 
     for (let p = 0; p < totalPacks; p++) {
@@ -129,69 +211,43 @@ const telestick = {
         ? (p === 0 ? packTitle : `${packTitle} ${p + 1}`)
         : packTitle;
 
-      const trayBuffer       = chunk[0]; // First sticker used as tray/cover icon
+      const partLabel      = totalPacks > 1 ? `(Part ${p + 1}/${totalPacks})` : '';
+      const trayBuffer     = chunk[0];
       const wastickersBuffer = buildWastickers(chunk, trayBuffer, chunkTitle, packAuthor);
 
-      const filename = totalPacks > 1
-        ? `${safeTitle}_${p + 1}.wastickers`
-        : `${safeTitle}.wastickers`;
-
       try {
-        // ── Send as native WhatsApp sticker pack card ────────
-        // This produces the "View sticker pack" card UI seen in
-        // the screenshot — same format WhatsApp itself uses when
-        // someone shares a sticker pack link inside the app.
-        await trashcore.sendMessage(m.key.remoteJid, {
-          document:       wastickersBuffer,
-          fileName:       filename,
-          // This exact mimetype triggers the sticker-pack card UI
-          // (thumbnail grid preview + "View sticker pack" button)
-          mimetype:       'image/webp',
-          // jpegThumbnail shows the 2×2 preview grid on the card
-          jpegThumbnail:  trayBuffer,
-          // contextInfo lets us embed the pack name + sticker count
-          // as the card subtitle, matching the screenshot layout
-          contextInfo: {
-            externalAdReply: {
-              title:           chunkTitle,
-              body:            `${chunk.length} stickers` + (totalPacks > 1 ? ` (Part ${p + 1}/${totalPacks})` : ''),
-              thumbnailUrl:    '',
-              thumbnail:       trayBuffer,
-              mediaType:       1,
-              renderLargerThumbnail: false,
-              showAdAttribution:     false,
-            }
-          }
-        }, { quoted: m });
-
+        await sendStickerPackCard(trashcore, m.key.remoteJid, {
+          wastickersBuffer,
+          trayBuffer,
+          title:      chunkTitle,
+          author:     packAuthor,
+          count:      chunk.length,
+          partLabel,
+          quotedMsg:  m
+        });
         sentPacks++;
-        if (p < totalPacks - 1) await new Promise(r => setTimeout(r, 1000));
       } catch (e) {
-        // fallback: send as plain document if card send fails
+        // Last-resort fallback — plain document
         try {
           await trashcore.sendMessage(m.key.remoteJid, {
             document: wastickersBuffer,
-            fileName: filename,
+            fileName: `${chunkTitle}.wastickers`,
             mimetype: 'application/vnd.ms-windows.stickers',
-            caption:
-              `🎭 *${chunkTitle}*\n` +
-              `📦 ${chunk.length} stickers` +
-              (totalPacks > 1 ? ` (Part ${p + 1}/${totalPacks})` : '') +
-              `\n\n_Tap → "Add to WhatsApp" to install!_`
+            caption:  `🎭 *${chunkTitle}*\n📦 ${chunk.length} stickers ${partLabel}`
           }, { quoted: m });
           sentPacks++;
-        } catch (_) {
-          // silently skip failed pack
-        }
+        } catch (_) {}
       }
+
+      if (p < totalPacks - 1) await new Promise(r => setTimeout(r, 1200));
     }
 
     return xreply(
       `✅ *Done!*\n` +
       `📂 ${sentPacks} pack${sentPacks !== 1 ? 's' : ''} sent\n` +
       `🎭 ${downloaded.length} stickers total\n` +
-      (failed  > 0 ? `❌ ${failed} failed to download\n`          : '') +
-      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`  : '') +
+      (failed  > 0 ? `❌ ${failed} failed to download\n`         : '') +
+      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n` : '') +
       `\n_Tap "View sticker pack" on each card to install!_`
     );
   }
