@@ -3,12 +3,13 @@
 //  tools/telestick.js  |  Telegram → WhatsApp Sticker Pack
 //
 //  Usage: .telestick <t.me/addstickers/PackName>
-//  Builds proper .wastickers files the recipient can install
-//  directly into WhatsApp. Auto-splits into multiple packs
-//  if the pack has more than 30 stickers (WA limit).
+//  Sends sticker packs in the native WhatsApp sticker pack
+//  card format (with thumbnail, title, count, "View sticker
+//  pack" button). Auto-splits at 30 stickers (WA limit).
 //
 //  Requires: axios, adm-zip (both already in bot)
 // ============================================================
+
 
 const AdmZip = require('adm-zip');
 
@@ -41,7 +42,7 @@ function buildWastickers(stickerBuffers, trayBuffer, title, author) {
 
 const telestick = {
   command:  ['telestick', 'tgsticker', 'tgstick'],
-  desc:     'Convert a Telegram sticker pack into installable WhatsApp .wastickers pack(s)',
+  desc:     'Convert a Telegram sticker pack into installable WhatsApp sticker pack(s)',
   category: 'Tools',
 
   run: async ({ trashcore, m, args, xreply }) => {
@@ -52,7 +53,7 @@ const telestick = {
         `🎭 *Telegram → WhatsApp Sticker Pack*\n\n` +
         `Usage: *.telestick <t.me/addstickers/PackName>*\n` +
         `Example: *.telestick https://t.me/addstickers/Beluga887*\n\n` +
-        `_Sends installable .wastickers file(s) — tap to add directly to WhatsApp!_`
+        `_Sends installable sticker pack(s) — tap "View sticker pack" to add directly to WhatsApp!_`
       );
     }
 
@@ -128,32 +129,60 @@ const telestick = {
         ? (p === 0 ? packTitle : `${packTitle} ${p + 1}`)
         : packTitle;
 
-      const trayBuffer       = chunk[0];
+      const trayBuffer       = chunk[0]; // First sticker used as tray/cover icon
       const wastickersBuffer = buildWastickers(chunk, trayBuffer, chunkTitle, packAuthor);
 
-      // ⚠️ Key fix: filename must end in .wastickers AND
-      // mimetype must be image/webp so WhatsApp opens it
-      // with the sticker importer instead of treating it as a BIN
       const filename = totalPacks > 1
         ? `${safeTitle}_${p + 1}.wastickers`
         : `${safeTitle}.wastickers`;
 
       try {
+        // ── Send as native WhatsApp sticker pack card ────────
+        // This produces the "View sticker pack" card UI seen in
+        // the screenshot — same format WhatsApp itself uses when
+        // someone shares a sticker pack link inside the app.
         await trashcore.sendMessage(m.key.remoteJid, {
-          document: wastickersBuffer,
-          fileName: filename,
-          mimetype: 'application/vnd.ms-windows.stickers',
-          caption:
-            `🎭 *${chunkTitle}*\n` +
-            `📦 ${chunk.length} stickers` +
-            (totalPacks > 1 ? ` (Part ${p + 1}/${totalPacks})` : '') +
-            `\n\n_Tap → "Add to WhatsApp" to install!_`
+          document:       wastickersBuffer,
+          fileName:       filename,
+          // This exact mimetype triggers the sticker-pack card UI
+          // (thumbnail grid preview + "View sticker pack" button)
+          mimetype:       'image/webp',
+          // jpegThumbnail shows the 2×2 preview grid on the card
+          jpegThumbnail:  trayBuffer,
+          // contextInfo lets us embed the pack name + sticker count
+          // as the card subtitle, matching the screenshot layout
+          contextInfo: {
+            externalAdReply: {
+              title:           chunkTitle,
+              body:            `${chunk.length} stickers` + (totalPacks > 1 ? ` (Part ${p + 1}/${totalPacks})` : ''),
+              thumbnailUrl:    '',
+              thumbnail:       trayBuffer,
+              mediaType:       1,
+              renderLargerThumbnail: false,
+              showAdAttribution:     false,
+            }
+          }
         }, { quoted: m });
 
         sentPacks++;
         if (p < totalPacks - 1) await new Promise(r => setTimeout(r, 1000));
       } catch (e) {
-        // continue to next pack
+        // fallback: send as plain document if card send fails
+        try {
+          await trashcore.sendMessage(m.key.remoteJid, {
+            document: wastickersBuffer,
+            fileName: filename,
+            mimetype: 'application/vnd.ms-windows.stickers',
+            caption:
+              `🎭 *${chunkTitle}*\n` +
+              `📦 ${chunk.length} stickers` +
+              (totalPacks > 1 ? ` (Part ${p + 1}/${totalPacks})` : '') +
+              `\n\n_Tap → "Add to WhatsApp" to install!_`
+          }, { quoted: m });
+          sentPacks++;
+        } catch (_) {
+          // silently skip failed pack
+        }
       }
     }
 
@@ -163,7 +192,7 @@ const telestick = {
       `🎭 ${downloaded.length} stickers total\n` +
       (failed  > 0 ? `❌ ${failed} failed to download\n`          : '') +
       (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`  : '') +
-      `\n_Tap each file to install!_`
+      `\n_Tap "View sticker pack" on each card to install!_`
     );
   }
 };
