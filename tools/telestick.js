@@ -1,39 +1,33 @@
 // ============================================================
 //  TRASHCORE ULTRA — External Plugin
 //  tools/telestick.js  |  Telegram → WhatsApp Sticker Pack
-//
-//  Usage: .telestick <t.me/addstickers/PackName>
-//  Builds proper .wastickers files the recipient can install
-//  directly into WhatsApp. Auto-splits into multiple packs
-//  if the pack has more than 30 stickers (WA limit).
-//
-//  Requires: axios, adm-zip (both already in bot)
-//  No image processing deps needed!
 // ============================================================
 
 const axios  = require('axios');
 const AdmZip = require('adm-zip');
 
-// ─── Helpers ─────────────────────────────────────────────────
-
 // Download URL as buffer
 async function fetchBuffer(url) {
-  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 15000 });
+  const res = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 20000,
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*'
+    }
+  });
   return Buffer.from(res.data);
 }
 
 // Build one .wastickers ZIP from sticker buffers
 function buildWastickers(stickerBuffers, trayBuffer, title, author) {
   const zip = new AdmZip();
-
   for (let i = 0; i < stickerBuffers.length; i++) {
     zip.addFile(`${Date.now() + i}.webp`, stickerBuffers[i]);
   }
-
   if (trayBuffer) zip.addFile('cover.png', trayBuffer);
   zip.addFile('title.txt',  Buffer.from(title,  'utf8'));
   zip.addFile('author.txt', Buffer.from(author, 'utf8'));
-
   return zip.toBuffer();
 }
 
@@ -51,8 +45,7 @@ const telestick = {
       return xreply(
         `🎭 *Telegram → WhatsApp Sticker Pack*\n\n` +
         `Usage: *.telestick <t.me/addstickers/PackName>*\n` +
-        `Example: *.telestick https://t.me/addstickers/Beluga887*\n\n` +
-        `_Sends installable .wastickers file(s) — tap to add directly to WhatsApp!_`
+        `Example: *.telestick https://t.me/addstickers/Beluga887*`
       );
     }
 
@@ -78,6 +71,10 @@ const telestick = {
     const allStickers = result.sticker || [];
     if (!allStickers.length) return xreply('❌ No stickers found in this pack.');
 
+    // ── Debug: show first sticker URL so we know what we're dealing with ──
+    const firstUrl = allStickers[0]?.url || 'N/A';
+    await xreply(`🔍 *Debug — First sticker URL:*\n${firstUrl}`);
+
     // Filter out animated/video stickers (.webm)
     const staticStickers = allStickers.filter(s => !s.url.endsWith('.webm'));
     const skipped = allStickers.length - staticStickers.length;
@@ -86,7 +83,6 @@ const telestick = {
     const packAuthor = result.name  || 'TrashcoreBot';
     const safeTitle  = packTitle.replace(/[^a-zA-Z0-9_\- ]/g, '').trim() || 'StickerPack';
 
-    // How many packs needed (30 stickers max per pack)
     const PACK_SIZE  = 30;
     const totalPacks = Math.ceil(staticStickers.length / PACK_SIZE);
 
@@ -96,8 +92,21 @@ const telestick = {
       `📊 ${allStickers.length} stickers` +
       (skipped    > 0 ? ` | ⏭ ${skipped} animated skipped`        : '') +
       (totalPacks > 1 ? ` | 📂 Splitting into ${totalPacks} packs` : '') +
-      `\n\n⬇️ Downloading ${staticStickers.length} stickers...`
+      `\n\n⬇️ Downloading...`
     );
+
+    // ── Try downloading first sticker only to check error ────
+    try {
+      const testBuffer = await fetchBuffer(firstUrl);
+      await xreply(`✅ Test download OK — ${testBuffer.length} bytes`);
+    } catch (e) {
+      return xreply(
+        `❌ *Download failed on first sticker*\n\n` +
+        `URL: ${firstUrl}\n` +
+        `Error: ${e.message}\n\n` +
+        `_This tells us what's wrong — share this message_`
+      );
+    }
 
     // ── Download all stickers ────────────────────────────────
     const downloaded = [];
@@ -113,7 +122,7 @@ const telestick = {
     }
 
     if (downloaded.length < 3) {
-      return xreply(`❌ Only downloaded ${downloaded.length} stickers (need at least 3). Try another pack.`);
+      return xreply(`❌ Only downloaded ${downloaded.length} stickers (need at least 3).\nFailed: ${failed}`);
     }
 
     await xreply(`🔨 Building pack${totalPacks > 1 ? 's' : ''}...`);
@@ -125,16 +134,13 @@ const telestick = {
       const chunk = downloaded.slice(p * PACK_SIZE, (p + 1) * PACK_SIZE);
       if (chunk.length < 1) continue;
 
-      // Name: "PackName" for part 1, "PackName 2", "PackName 3" etc.
       const chunkTitle = totalPacks > 1
         ? (p === 0 ? packTitle : `${packTitle} ${p + 1}`)
         : packTitle;
 
-      // Use first sticker of chunk as tray icon (webp works as cover too)
-      const trayBuffer = chunk[0];
-
+      const trayBuffer       = chunk[0];
       const wastickersBuffer = buildWastickers(chunk, trayBuffer, chunkTitle, packAuthor);
-      const filename = totalPacks > 1
+      const filename         = totalPacks > 1
         ? `${safeTitle}_${p + 1}.wastickers`
         : `${safeTitle}.wastickers`;
 
@@ -151,23 +157,18 @@ const telestick = {
         }, { quoted: m });
 
         sentPacks++;
-
-        // Small delay between packs
-        if (p < totalPacks - 1) {
-          await new Promise(r => setTimeout(r, 1000));
-        }
+        if (p < totalPacks - 1) await new Promise(r => setTimeout(r, 1000));
       } catch (e) {
-        // continue to next pack
+        // continue
       }
     }
 
-    // ── Final summary ────────────────────────────────────────
     return xreply(
       `✅ *Done!*\n` +
       `📂 ${sentPacks} pack${sentPacks !== 1 ? 's' : ''} sent\n` +
       `🎭 ${downloaded.length} stickers total\n` +
-      (failed  > 0 ? `❌ ${failed} failed to download\n`          : '') +
-      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`  : '') +
+      (failed  > 0 ? `❌ ${failed} failed\n`                       : '') +
+      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n`   : '') +
       `\n_Tap each file to install!_`
     );
   }
