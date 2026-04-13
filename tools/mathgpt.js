@@ -3,8 +3,6 @@
 //  tools/mathgpt.js  |  MathGPT Plugin
 // ============================================================
 
-const axios = require('axios');
-
 const mathgpt = {
   command:  ['mathgpt', 'mathai'],
   desc:     'Solve math problems using AI',
