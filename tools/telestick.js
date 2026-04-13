@@ -142,7 +142,7 @@ const telestick = {
         await trashcore.sendMessage(m.key.remoteJid, {
           document: wastickersBuffer,
           fileName: filename,
-          mimetype: 'image/webp',   // ← triggers WhatsApp sticker importer
+          mimetype: 'application/vnd.ms-windows.stickers',
           caption:
             `🎭 *${chunkTitle}*\n` +
             `📦 ${chunk.length} stickers` +
