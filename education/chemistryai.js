@@ -6,7 +6,7 @@
 const chemistryai = {
   command:  ['chemistryai', 'chemai', 'scienceai'],
   desc:     'Ask chemistry or physics questions',
-  category: 'Education',
+  category: 'education',
 
   run: async ({ trashcore, m, args, text, xreply }) => {
     const query = args.join(' ').trim();
