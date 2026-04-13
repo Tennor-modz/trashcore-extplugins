@@ -6,7 +6,7 @@
 const fruit = {
   command:  ['fruit', 'fruitinfo'],
   desc:     'Get information about a fruit',
-  category: 'Education',
+  category: 'education',
 
   run: async ({ trashcore, m, args, text, xreply }) => {
     const query = args.join(' ').trim();
