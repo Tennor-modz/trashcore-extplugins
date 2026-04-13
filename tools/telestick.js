@@ -4,7 +4,9 @@
 //
 //  Usage: .telestick https://t.me/addstickers/PackName
 //  Sends all stickers from a Telegram sticker pack to WhatsApp
-// ===========================================================
+// ============================================================
+
+const axios = require('axios');
 
 const telestick = {
   command:  ['telestick', 'tgsticker', 'tgstick'],
@@ -22,7 +24,6 @@ const telestick = {
       );
     }
 
-    // Accept both full URL and just pack name
     const packUrl = input.startsWith('http')
       ? input
       : `https://t.me/addstickers/${input}`;
@@ -43,12 +44,9 @@ const telestick = {
     }
 
     const stickers = result.sticker || [];
-    if (!stickers.length) {
-      return xreply('❌ No stickers found in this pack.');
-    }
+    if (!stickers.length) return xreply('❌ No stickers found in this pack.');
 
-    // Filter out .webm (animated/video stickers — not supported as stickers in WA)
-    const staticStickers = stickers.filter(s => s.url.endsWith('.webp'));
+    const staticStickers = stickers.filter(s => !s.url.endsWith('.webm'));
     const skipped = stickers.length - staticStickers.length;
 
     await xreply(
@@ -71,15 +69,12 @@ const telestick = {
 
         const buffer = Buffer.from(response.data);
 
-        await trashcore.sendMessage(m.chat, {
-          sticker: buffer,
-          mimetype: 'image/webp'
-        }, { quoted: m });
+        await trashcore.sendMessage(m.key.remoteJid, {
+          sticker: buffer
+        });
 
         sent++;
-
-        // Small delay to avoid flooding
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
 
       } catch (e) {
         failed++;
