@@ -3,7 +3,7 @@
 //  tools/telestick.js  |  Telegram → WhatsApp Sticker Pack
 // ============================================================
 
-const axios  = require('axios');
+
 const AdmZip = require('adm-zip');
 
 // Download URL as buffer
