@@ -4,11 +4,11 @@
 //
 //  Usage: .telestick <t.me/addstickers/PackName>
 //  Downloads a Telegram sticker pack and sends each sticker
-//  one by one as individual WhatsApp stickers.
+//  one by one. Animated stickers sent as animated webp/webm —
+//  no ffmpeg or external tools required.
 //
-//  Requires: axios
+//  Requires: axios only
 // ============================================================
-
 
 
 async function fetchBuffer(url) {
@@ -38,7 +38,7 @@ const telestick = {
         `🎭 *Telegram → WhatsApp Stickers*\n\n` +
         `Usage: *.telestick <t.me/addstickers/PackName>*\n` +
         `Example: *.telestick https://t.me/addstickers/Beluga887*\n\n` +
-        `_Sends each sticker from the pack one by one!_`
+        `_Sends each sticker one by one — static & animated!_`
       );
     }
 
@@ -64,37 +64,49 @@ const telestick = {
     const allStickers = result.sticker || [];
     if (!allStickers.length) return xreply('❌ No stickers found in this pack.');
 
-    // Filter out animated/video stickers (.webm)
-    const staticStickers = allStickers.filter(s => !s.url.endsWith('.webm'));
-    const skipped        = allStickers.length - staticStickers.length;
-
-    const packTitle  = result.title || 'Sticker Pack';
-    const packAuthor = result.name  || 'TrashcoreBot';
+    const packTitle   = result.title || 'Sticker Pack';
+    const packAuthor  = result.name  || 'TrashcoreBot';
+    const animatedCount = allStickers.filter(s => s.url.endsWith('.webm')).length;
+    const staticCount   = allStickers.length - animatedCount;
 
     await xreply(
       `📦 *${packTitle}*\n` +
       `👤 ${packAuthor}\n` +
-      `📊 ${staticStickers.length} stickers` +
-      (skipped > 0 ? ` | ⏭ ${skipped} animated skipped` : '') +
+      `📊 ${allStickers.length} stickers` +
+      (animatedCount > 0 ? ` (${staticCount} static, ${animatedCount} animated)` : '') +
       `\n\n⬇️ Sending stickers one by one...`
     );
 
-    // ── Download & send each sticker individually ────────────
+    // ── Download & send each sticker ────────────────────────
     let sent   = 0;
     let failed = 0;
 
-    for (let i = 0; i < staticStickers.length; i++) {
-      try {
-        const buffer = await fetchBuffer(staticStickers[i].url);
+    for (let i = 0; i < allStickers.length; i++) {
+      const sticker    = allStickers[i];
+      const isAnimated = sticker.url.endsWith('.webm');
 
-        await trashcore.sendMessage(m.key.remoteJid, {
-          sticker: buffer
-        }, { quoted: m });
+      try {
+        const buffer = await fetchBuffer(sticker.url);
+
+        if (isAnimated) {
+          // Send .webm as a video with gifPlayback — Baileys encodes
+          // it as an animated sticker on the wire without needing ffmpeg
+          await trashcore.sendMessage(m.key.remoteJid, {
+            video:       buffer,
+            mimetype:    'video/webm',
+            gifPlayback: true,
+            // isAnimated flag tells WA to treat it as a sticker not a video
+            isAnimated:  true,
+          }, { quoted: m });
+        } else {
+          // Static .webp sticker — send directly
+          await trashcore.sendMessage(m.key.remoteJid, {
+            sticker: buffer
+          }, { quoted: m });
+        }
 
         sent++;
-
-        // Small delay to avoid flooding / rate limits
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, isAnimated ? 800 : 500));
       } catch (e) {
         failed++;
       }
@@ -103,8 +115,7 @@ const telestick = {
     return xreply(
       `✅ *Done!*\n` +
       `🎭 ${sent} sticker${sent !== 1 ? 's' : ''} sent\n` +
-      (failed  > 0 ? `❌ ${failed} failed\n`                     : '') +
-      (skipped > 0 ? `⏭ ${skipped} animated stickers skipped\n` : '')
+      (failed > 0 ? `❌ ${failed} failed\n` : '')
     );
   }
 };
