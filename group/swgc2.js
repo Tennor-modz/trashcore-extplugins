@@ -25,7 +25,7 @@ async function downloadToTmp(trashcore, m, isVideo) {
   return tmpPath;
 }
 
-// ─── Command 1: swgc ─────────────────────────────────────────
+// ─── Command 1: swgc2 ────────────────────────────────────────
 const swgc2 = {
   command:  ['swgc2'],
   desc:     'Send media as group status to a selected group',
@@ -39,14 +39,14 @@ const swgc2 = {
     const isImage = !!m.message?.imageMessage;
 
     if (!isImage && !isVideo) {
-      return xreply('❌ *Send an image or video!*\nExample: send media with caption `.swgc`');
+      return xreply('❌ *Send an image or video!*\nExample: send media with caption `.swgc2`');
     }
 
     // Fetch all groups bot is in
     const meta = await trashcore.groupFetchAllParticipating();
     const rows = Object.keys(meta).map(id => ({
       title:       meta[id].subject,
-      id:          `.sendswgc ${id}`,
+      id:          `.sendswgc ${id}`,        // this becomes the text when selected
       description: `${meta[id].participants.length} Members`
     }));
 
@@ -57,6 +57,8 @@ const swgc2 = {
     swgcStore[senderJid] = { filePath: tmpPath, isVideo };
 
     // Send group selection list
+    // NOTE: viewOnce removed — it wraps the reply in viewOnceMessage
+    // and some Baileys builds fail to extract the interactiveResponse from it
     await trashcore.sendMessage(chat, {
       buttons: [{
         buttonId: 'action',
@@ -75,7 +77,6 @@ const swgc2 = {
       }],
       footer:     '© TrashCore Ultra - 2026',
       headerType: 1,
-      viewOnce:   true,
       text:       '*Select a group to post the status to!*',
       contextInfo: {
         isForwarded:  true,
@@ -96,7 +97,13 @@ const sendswgc = {
     if (!isOwner) return;
 
     const stored = swgcStore[senderJid];
-    if (!stored) return xreply('❌ No media stored. Send media with `.swgc` first.');
+    if (!stored) return xreply('❌ No media stored. Send media with `.swgc2` first.');
+
+    // args[0] is the target group JID selected from the list
+    const targetGroupId = args[0];
+    if (!targetGroupId || !targetGroupId.endsWith('@g.us')) {
+      return xreply('❌ Invalid group ID. Please select again using `.swgc2`.');
+    }
 
     const { filePath, isVideo } = stored;
 
@@ -110,26 +117,21 @@ const sendswgc = {
       const buffer = fs.readFileSync(filePath);
 
       if (isVideo) {
-        await trashcore.sendMessage(chat, {
+        await trashcore.sendMessage(targetGroupId, {
           groupStatusMessage: { video: buffer }
         });
       } else {
-        await trashcore.sendMessage(chat, {
+        await trashcore.sendMessage(targetGroupId, {
           groupStatusMessage: { image: buffer }
         });
       }
 
-      await trashcore.sendMessage(chat, {
-        text: '✅ *Successfully posted status to target group!*'
-      }, { quoted: null });
-
+      await xreply(`✅ *Successfully posted status to target group!*`);
       cleanup();
 
     } catch (err) {
       console.error('❌ sendswgc error:', err.message);
-      await trashcore.sendMessage(chat, {
-        text: '❌ *Failed to post group status!*'
-      }, { quoted: null });
+      await xreply('❌ *Failed to post group status!*');
       cleanup();
     }
   }
