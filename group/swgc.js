@@ -29,7 +29,7 @@ async function downloadToTmp(trashcore, m, isVideo) {
 const swgc = {
   command:  ['swgc'],
   desc:     'Send media as group status to a selected group',
-  category: 'Admin',
+  category: 'Group',
   owner:    true,
 
   run: async ({ trashcore, m, xreply, chat, isOwner, senderJid }) => {
@@ -89,7 +89,7 @@ const swgc = {
 const sendswgc = {
   command:  ['sendswgc'],
   desc:     'Post stored media as group status (auto-triggered by swgc list)',
-  category: 'Admin',
+  category: 'Group',
   owner:    true,
 
   run: async ({ trashcore, m, args, xreply, chat, isOwner, senderJid }) => {
