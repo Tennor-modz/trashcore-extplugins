@@ -27,7 +27,7 @@ async function downloadToTmp(trashcore, m, isVideo) {
 
 // ─── Command 1: swgc ─────────────────────────────────────────
 const swgc = {
-  command:  ['swgc'],
+  command:  ['swgc2'],
   desc:     'Send media as group status to a selected group',
   category: 'Group',
   owner:    true,
